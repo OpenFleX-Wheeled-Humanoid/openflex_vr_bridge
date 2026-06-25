@@ -1,6 +1,10 @@
 # openflex_vr_bridge
 
-ROS 2 node that receives UDP datagrams from Pico VR controllers and body trackers, and publishes them as ROS 2 topics.
+English | [中文](./README-CN.md)
+
+---
+
+ROS 2 node that receives UDP datagrams from Pico or quest VR controllers and body trackers, and publishes them as ROS 2 topics.
 
 ## Overview
 
@@ -78,13 +82,22 @@ The node accepts text-based datagrams in several formats:
 
 ```bash
 # Build
+\nEnglish | [中文](./README-CN.md)
+
+---
 cd ~/openflex_all/openflex_ws
 colcon build --packages-select openflex_vr_bridge
 
 # Run standalone
+\nEnglish | [中文](./README-CN.md)
+
+---
 ros2 run openflex_vr_bridge pico_pose_bridge_node --ros-args -p listen_port:=5100
 
 # Run with parameters
+\nEnglish | [中文](./README-CN.md)
+
+---
 ros2 run openflex_vr_bridge pico_pose_bridge_node --ros-args \
   -p listen_port:=5100 \
   -p publish_tf:=true \

@@ -1,6 +1,10 @@
 # openflex_vr_bridge
 
-接收 Pico VR 手柄和体感追踪器 UDP 数据报并发布为 ROS 2 话题的节点。
+[English](./README.md) | 中文
+
+---
+
+接收 Pico 和 quest VR 手柄和体感追踪器 UDP 数据报并发布为 ROS 2 话题的节点。
 
 ## 概述
 
@@ -78,13 +82,22 @@
 
 ```bash
 # 编译
+\n[English](./README.md) | 中文
+
+---
 cd ~/openflex_all/openflex_ws
 colcon build --packages-select openflex_vr_bridge
 
 # 独立运行
+\n[English](./README.md) | 中文
+
+---
 ros2 run openflex_vr_bridge pico_pose_bridge_node
 
 # 带参数运行
+\n[English](./README.md) | 中文
+
+---
 ros2 run openflex_vr_bridge pico_pose_bridge_node --ros-args \
   -p listen_port:=5100 \
   -p publish_tf:=true \
