@@ -517,17 +517,17 @@ private:
                 return std::abs(value - 0.1) < 1e-6 || std::abs(value - 1.0) < 1e-6;
             };
 
-            sample.button_a = false;
-            sample.button_b = false;
-            sample.button_x = false;
-            sample.button_y = false;
-            sample.joystick_click = false;
-            sample.joystick_x = 0.0;
-            sample.joystick_y = 0.0;
+            bool has_joystick_axes = false;
+            bool has_button_snapshot = false;
             sample.rate = 0.1;
             sample.timestamp_ns = 0;
 
             if (tail_values.size() >= 9) {
+                // Extended HAND packets carry their own button snapshot. Short
+                // HAND packets use separate BTN packets, so they must retain
+                // the latest button state instead of clearing it every frame.
+                has_joystick_axes = true;
+                has_button_snapshot = true;
                 sample.button_a = tail_values[0] != 0.0;
                 sample.button_b = tail_values[1] != 0.0;
                 sample.button_x = tail_values[2] != 0.0;
@@ -538,11 +538,13 @@ private:
                 sample.rate = is_valid_rate(tail_values[7]) ? tail_values[7] : 0.1;
                 sample.timestamp_ns = static_cast<int64_t>(tail_values[8]);
             } else if (tail_values.size() >= 4) {
+                has_joystick_axes = true;
                 sample.joystick_x = tail_values[0];
                 sample.joystick_y = tail_values[1];
                 sample.rate = is_valid_rate(tail_values[2]) ? tail_values[2] : 0.1;
                 sample.timestamp_ns = static_cast<int64_t>(tail_values[3]);
             } else if (tail_values.size() == 3) {
+                has_joystick_axes = true;
                 sample.joystick_x = tail_values[0];
                 sample.joystick_y = tail_values[1];
                 sample.rate = is_valid_rate(tail_values[2]) ? tail_values[2] : 0.1;
@@ -551,6 +553,7 @@ private:
                     sample.rate = tail_values[0];
                     sample.timestamp_ns = static_cast<int64_t>(tail_values[1]);
                 } else {
+                    has_joystick_axes = true;
                     sample.joystick_x = tail_values[0];
                     sample.joystick_y = tail_values[1];
                 }
@@ -562,7 +565,7 @@ private:
                 }
             }
 
-            publishSample(sample);
+            publishSample(sample, has_joystick_axes, has_button_snapshot);
             return true;
         }
 
@@ -873,7 +876,9 @@ private:
         }
     }
 
-    void publishSample(const PoseSample &sample) {
+    void publishSample(const PoseSample &sample,
+                       bool publish_joystick_axes = true,
+                       bool publish_button_snapshot = true) {
         latest_samples_[sample.hand] = sample;
 
         // 调试：显示发布信息
@@ -901,14 +906,22 @@ private:
 
         publishTriggerMessage(sample.hand, sample.trigger_value);
         publishGripMessage(sample.hand, sample.grip_value);
-        publishJoystickMessage(sample.hand, sample.joystick_x, sample.joystick_y);
-        publishButtonMessage(ButtonId::JOYSTICK, sample.hand, sample.joystick_click);
+        if (publish_joystick_axes) {
+            publishJoystickMessage(sample.hand, sample.joystick_x, sample.joystick_y);
+        }
+        if (publish_button_snapshot) {
+            publishButtonMessage(ButtonId::JOYSTICK, sample.hand, sample.joystick_click);
+        }
 
         RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
                               "Publishing rate=%.2f to both hands", sample.rate);
         publishRateMessage(sample.rate);
 
         // 发布按键状态（根据手柄类型只发布对应的按键）
+        if (!publish_button_snapshot) {
+            return;
+        }
+
         if (sample.hand == RIGHT) {
             // 右手柄：只发布 A 和 B 按键
             static bool last_a = false, last_b = false;
