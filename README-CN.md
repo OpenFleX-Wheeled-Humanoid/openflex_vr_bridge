@@ -23,6 +23,7 @@
 | `/pico_{left,right}_controller/joystick_y` | `std_msgs/Float32` | 摇杆 Y 轴（-1 到 1） |
 | `/pico_{left,right}_controller/joystick_click` | `std_msgs/Bool` | 摇杆按下状态 |
 | `/pico_{left,right}_controller/rate` | `std_msgs/Float32` | 速度倍率（0.1 或 1.0） |
+| `/vr/controller_pose_mode` | `std_msgs/String` | 当前位姿来源：`gripper`（AIM）或 `hand`（GRIP） |
 
 ### 按键话题
 
@@ -75,6 +76,7 @@
 - **TRIG** `L/R trigger_value [timestamp_ns]`
 - **RATE** `rate_value [timestamp_ns]`
 - **CFG** `LIN/ANG speed_value`
+- **CFG** `POSE_MODE 0|1 [timestamp_ns]`（0=gripper/AIM，1=hand/GRIP）
 - **WAIST/LEFT_FOOT/RIGHT_FOOT/HEAD** `pos_x pos_y pos_z qx qy qz qw [timestamp_ns]`
 - 旧格式：`L/R pos_x pos_y pos_z qx qy qz qw trigger grip ...`
 

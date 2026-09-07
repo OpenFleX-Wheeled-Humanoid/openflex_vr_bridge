@@ -9,11 +9,12 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
 add_executable(pico_pose_bridge_node src/pose_bridge_node.cpp)
-ament_target_dependencies(pico_pose_bridge_node rclcpp geometry_msgs tf2_ros tf2_geometry_msgs)
+ament_target_dependencies(pico_pose_bridge_node rclcpp geometry_msgs std_msgs tf2_ros tf2_geometry_msgs)
 
 install(TARGETS pico_pose_bridge_node
   DESTINATION lib/${PROJECT_NAME})

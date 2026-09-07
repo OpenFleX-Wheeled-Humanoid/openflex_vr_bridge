@@ -17,6 +17,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "std_msgs/msg/float32.hpp"
 #include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 
@@ -100,6 +101,8 @@ public:
                 declare_parameter<std::string>("left_joystick_click_topic", "pico_left_controller/joystick_click");
         joystick_click_topics_[RIGHT] =
                 declare_parameter<std::string>("right_joystick_click_topic", "pico_right_controller/joystick_click");
+        pose_source_mode_topic_ = declare_parameter<std::string>(
+                "pose_source_mode_topic", "/vr/controller_pose_mode");
 
         // 体感追踪器话题参数
         tracker_topics_[WAIST] =
@@ -155,6 +158,8 @@ public:
                 create_publisher<std_msgs::msg::Bool>(joystick_click_topics_[LEFT], 10);
         joystick_click_publishers_[RIGHT] =
                 create_publisher<std_msgs::msg::Bool>(joystick_click_topics_[RIGHT], 10);
+        pose_source_mode_publisher_ = create_publisher<std_msgs::msg::String>(
+                pose_source_mode_topic_, 10);
 
         // 体感追踪器 publisher
         for (int i = 0; i < TRACKER_COUNT; ++i) {
@@ -591,6 +596,50 @@ private:
             return true;
         }
 
+        if (stringEqualsIgnoreCase(token, "CFG")) {
+            std::string config_name;
+            if (!(iss >> config_name)) {
+                return false;
+            }
+            if (stringEqualsIgnoreCase(config_name, "POSE_MODE")) {
+                int mode_value = -1;
+                int64_t timestamp_ns = 0;
+                if (!(iss >> mode_value)) {
+                    return false;
+                }
+                (void)(iss >> timestamp_ns);
+                if (mode_value != 0 && mode_value != 1) {
+                    RCLCPP_WARN(get_logger(), "Ignoring invalid POSE_MODE value: %d", mode_value);
+                    return false;
+                }
+                std_msgs::msg::String mode_msg;
+                mode_msg.data = mode_value == 0 ? "gripper" : "hand";
+                pose_source_mode_publisher_->publish(mode_msg);
+                RCLCPP_INFO(get_logger(), "VR pose source mode: %s",
+                            mode_msg.data.c_str());
+                return true;
+            }
+
+            double config_value = 0.0;
+            if (!(iss >> config_value)) {
+                return false;
+            }
+            int64_t ignored_timestamp_ns = 0;
+            (void)(iss >> ignored_timestamp_ns);
+
+            if (stringEqualsIgnoreCase(config_name, "LIN") ||
+                stringEqualsIgnoreCase(config_name, "LINEAR")) {
+                publishChassisLinearSpeedMessage(config_value);
+                return true;
+            }
+            if (stringEqualsIgnoreCase(config_name, "ANG") ||
+                stringEqualsIgnoreCase(config_name, "ANGULAR")) {
+                publishChassisAngularSpeedMessage(config_value);
+                return true;
+            }
+            return false;
+        }
+
         if (stringEqualsIgnoreCase(token, "BTN")) {
             std::string hand_token;
             std::string button_token;
@@ -674,28 +723,6 @@ private:
             return true;
         }
 
-        if (stringEqualsIgnoreCase(token, "CFG")) {
-            std::string config_token;
-            double config_value = 0.0;
-            if (!(iss >> config_token >> config_value)) {
-                return false;
-            }
-            int64_t ignored_timestamp_ns = 0;
-            (void)(iss >> ignored_timestamp_ns);
-
-            if (stringEqualsIgnoreCase(config_token, "LIN") ||
-                stringEqualsIgnoreCase(config_token, "LINEAR")) {
-                publishChassisLinearSpeedMessage(config_value);
-                return true;
-            }
-            if (stringEqualsIgnoreCase(config_token, "ANG") ||
-                stringEqualsIgnoreCase(config_token, "ANGULAR")) {
-                publishChassisAngularSpeedMessage(config_value);
-                return true;
-            }
-            return false;
-        }
-
         return false;
     }
 
@@ -730,35 +757,23 @@ private:
             out_sample.grip_value = 0.0;
         }
 
-        // 解析按键状态（如果存在）
-        int button_a_int = 0, button_b_int = 0, button_x_int = 0, button_y_int = 0;
-        if (!(iss >> button_a_int)) {
-            button_a_int = 0;
+        // Collect every remaining field before interpreting the packet shape.
+        // The current APK streams: joystick_x joystick_y rate timestamp.
+        // Older APKs prepend A/B/X/Y snapshots to those fields.
+        std::vector<double> remaining_values;
+        double remaining_value = 0.0;
+        while (iss >> remaining_value) {
+            remaining_values.push_back(remaining_value);
         }
-        if (!(iss >> button_b_int)) {
-            button_b_int = 0;
-        }
-        if (!(iss >> button_x_int)) {
-            button_x_int = 0;
-        }
-        if (!(iss >> button_y_int)) {
-            button_y_int = 0;
-        }
-        out_sample.button_a = (button_a_int != 0);
-        out_sample.button_b = (button_b_int != 0);
-        out_sample.button_x = (button_x_int != 0);
-        out_sample.button_y = (button_y_int != 0);
 
+        out_sample.button_a = false;
+        out_sample.button_b = false;
+        out_sample.button_x = false;
+        out_sample.button_y = false;
         out_sample.joystick_x = 0.0;
         out_sample.joystick_y = 0.0;
         out_sample.rate = 0.1;
         out_sample.timestamp_ns = 0;
-
-        std::vector<double> tail_values;
-        double tail_value = 0.0;
-        while (iss >> tail_value) {
-            tail_values.push_back(tail_value);
-        }
 
         const auto is_valid_rate = [](double value) {
             return std::abs(value - 0.1) < 1e-6 || std::abs(value - 1.0) < 1e-6;
@@ -775,30 +790,59 @@ private:
             }
         };
 
-        if (tail_values.size() >= 4) {
-            // Extended OpenFlex packet: joystick_x joystick_y rate timestamp.
-            out_sample.joystick_x = tail_values[0];
-            out_sample.joystick_y = tail_values[1];
-            parse_rate_or_timestamp(tail_values[2]);
-            out_sample.timestamp_ns = static_cast<int64_t>(tail_values[3]);
-        } else if (tail_values.size() == 3) {
-            // Extended packet without timestamp: joystick_x joystick_y rate.
-            out_sample.joystick_x = tail_values[0];
-            out_sample.joystick_y = tail_values[1];
-            parse_rate_or_timestamp(tail_values[2]);
-        } else if (tail_values.size() == 2) {
-            if (is_valid_rate(tail_values[0])) {
+        const auto set_legacy_buttons = [&]() {
+            out_sample.button_a = remaining_values[0] != 0.0;
+            out_sample.button_b = remaining_values[1] != 0.0;
+            out_sample.button_x = remaining_values[2] != 0.0;
+            out_sample.button_y = remaining_values[3] != 0.0;
+        };
+
+        if (remaining_values.size() >= 8) {
+            // Legacy extended packet: A B X Y joystick_x joystick_y rate timestamp.
+            set_legacy_buttons();
+            out_sample.joystick_x = remaining_values[4];
+            out_sample.joystick_y = remaining_values[5];
+            parse_rate_or_timestamp(remaining_values[6]);
+            out_sample.timestamp_ns = static_cast<int64_t>(remaining_values[7]);
+        } else if (remaining_values.size() == 7) {
+            // Legacy extended packet without timestamp.
+            set_legacy_buttons();
+            out_sample.joystick_x = remaining_values[4];
+            out_sample.joystick_y = remaining_values[5];
+            parse_rate_or_timestamp(remaining_values[6]);
+        } else if (remaining_values.size() == 6) {
+            // Legacy button snapshot followed by rate and timestamp.
+            set_legacy_buttons();
+            parse_rate_or_timestamp(remaining_values[4]);
+            out_sample.timestamp_ns = static_cast<int64_t>(remaining_values[5]);
+        } else if (remaining_values.size() == 5) {
+            // Legacy button snapshot followed by rate.
+            set_legacy_buttons();
+            parse_rate_or_timestamp(remaining_values[4]);
+        } else if (remaining_values.size() >= 4) {
+            // Current APK: joystick_x joystick_y rate timestamp.
+            out_sample.joystick_x = remaining_values[0];
+            out_sample.joystick_y = remaining_values[1];
+            parse_rate_or_timestamp(remaining_values[2]);
+            out_sample.timestamp_ns = static_cast<int64_t>(remaining_values[3]);
+        } else if (remaining_values.size() == 3) {
+            // Current packet without timestamp: joystick_x joystick_y rate.
+            out_sample.joystick_x = remaining_values[0];
+            out_sample.joystick_y = remaining_values[1];
+            parse_rate_or_timestamp(remaining_values[2]);
+        } else if (remaining_values.size() == 2) {
+            if (is_valid_rate(remaining_values[0])) {
                 // Legacy packet: rate timestamp.
-                out_sample.rate = tail_values[0];
-                out_sample.timestamp_ns = static_cast<int64_t>(tail_values[1]);
+                out_sample.rate = remaining_values[0];
+                out_sample.timestamp_ns = static_cast<int64_t>(remaining_values[1]);
             } else {
                 // Extended packet without rate/timestamp: joystick_x joystick_y.
-                out_sample.joystick_x = tail_values[0];
-                out_sample.joystick_y = tail_values[1];
+                out_sample.joystick_x = remaining_values[0];
+                out_sample.joystick_y = remaining_values[1];
             }
-        } else if (tail_values.size() == 1) {
+        } else if (remaining_values.size() == 1) {
             // Legacy packet: rate, or timestamp when rate is omitted.
-            parse_rate_or_timestamp(tail_values[0]);
+            parse_rate_or_timestamp(remaining_values[0]);
         }
 
         // 调试：显示解析结果
@@ -917,38 +961,10 @@ private:
                               "Publishing rate=%.2f to both hands", sample.rate);
         publishRateMessage(sample.rate);
 
-        // 发布按键状态（根据手柄类型只发布对应的按键）
-        if (!publish_button_snapshot) {
-            return;
-        }
-
-        if (sample.hand == RIGHT) {
-            // 右手柄：只发布 A 和 B 按键
-            static bool last_a = false, last_b = false;
-            if (sample.button_a != last_a || sample.button_b != last_b) {
-                RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-                                      "Right hand button state changed: A=%d B=%d",
-                                      sample.button_a ? 1 : 0, sample.button_b ? 1 : 0);
-                last_a = sample.button_a;
-                last_b = sample.button_b;
-            }
-
-            publishButtonMessage(ButtonId::A, sample.hand, sample.button_a);
-            publishButtonMessage(ButtonId::B, sample.hand, sample.button_b);
-        } else {
-            // 左手柄：只发布 X 和 Y 按键
-            static bool last_x = false, last_y = false;
-            if (sample.button_x != last_x || sample.button_y != last_y) {
-                RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-                                      "Left hand button state changed: X=%d Y=%d",
-                                      sample.button_x ? 1 : 0, sample.button_y ? 1 : 0);
-                last_x = sample.button_x;
-                last_y = sample.button_y;
-            }
-
-            publishButtonMessage(ButtonId::X, sample.hand, sample.button_x);
-            publishButtonMessage(ButtonId::Y, sample.hand, sample.button_y);
-        }
+        // A/B/X/Y are event messages and must only arrive through BTN packets.
+        // Never republish the snapshot carried by a legacy pose packet: its
+        // false value would clear a toggle (notably the B/head-control toggle)
+        // on every streamed pose frame.
     }
 
     std::string listen_address_;
@@ -961,6 +977,7 @@ private:
     std::array<std::string, HAND_COUNT> joystick_x_topics_;
     std::array<std::string, HAND_COUNT> joystick_y_topics_;
     std::array<std::string, HAND_COUNT> joystick_click_topics_;
+    std::string pose_source_mode_topic_;
     std::array<PoseSample, HAND_COUNT> latest_samples_;
     std::array<rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr, HAND_COUNT>
             pose_publishers_;
@@ -974,6 +991,7 @@ private:
             joystick_y_publishers_;
     std::array<rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr, HAND_COUNT>
             joystick_click_publishers_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pose_source_mode_publisher_;
     std::array<rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr, HAND_COUNT>
             rate_publishers_;  // 添加这行
     std::string button_a_topic_;
